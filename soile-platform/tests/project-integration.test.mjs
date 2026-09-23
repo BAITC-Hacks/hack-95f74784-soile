@@ -6,6 +6,7 @@ import {
   confirmStage,
   createProject,
   rejectStage,
+  submitStage,
 } from '../dist/modules/project-workflow.mjs';
 
 function makeState() {
@@ -57,6 +58,13 @@ function totalTeamScore(state, team) {
   return (state.teamPoints[team] || 0) + projectPoints;
 }
 
+function submit(project, stageId) {
+  return submitStage(project, stageId, {
+    description: `Результат этапа ${stageId}`,
+    url: `https://example.org/${stageId}`,
+  }, project.teamId);
+}
+
 test('принятие отклика создаёт один проект и не начисляет 250 баллов', () => {
   const initial = makeState();
   const accepted = acceptProposal(initial, 'proposal-1');
@@ -74,21 +82,21 @@ test('общий счёт растёт только по подтверждён�
   const selectedScore = totalTeamScore(state, 'NOVA Lab');
 
   state.projects[0] = confirmStage(
-    state.projects[0],
+    submit(state.projects[0], 'plan_confirmed'),
     'plan_confirmed',
     'business-demo',
   );
   const planScore = totalTeamScore(state, 'NOVA Lab');
 
   state.projects[0] = confirmStage(
-    state.projects[0],
+    submit(state.projects[0], 'prototype_confirmed'),
     'prototype_confirmed',
     'business-demo',
   );
   const prototypeScore = totalTeamScore(state, 'NOVA Lab');
 
   state.projects[0] = confirmStage(
-    state.projects[0],
+    submit(state.projects[0], 'result_confirmed'),
     'result_confirmed',
     'business-demo',
   );
@@ -102,7 +110,7 @@ test('общий счёт растёт только по подтверждён�
 test('отклонение сохраняется после JSON round-trip и не меняет счёт', () => {
   const state = acceptProposal(makeState(), 'proposal-1');
   state.projects[0] = rejectStage(
-    state.projects[0],
+    submit(state.projects[0], 'plan_confirmed'),
     'plan_confirmed',
     'Добавьте сроки и ответственных',
   );
@@ -114,6 +122,7 @@ test('отклонение сохраняется после JSON round-trip и 
 
   assert.equal(stage.status, 'rejected');
   assert.equal(stage.rejectionReason, 'Добавьте сроки и ответственных');
+  assert.equal(stage.submission.revision, 1);
+  assert.equal(restored.projects[0].history.at(-2).action, 'stage_submitted');
   assert.equal(totalTeamScore(restored, 'NOVA Lab'), 780);
 });
-

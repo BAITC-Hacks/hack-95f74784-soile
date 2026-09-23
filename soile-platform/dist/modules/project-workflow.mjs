@@ -45,6 +45,31 @@ function findStageDefinition(stageId) {
   return STAGES.find((stage) => stage.id === stageId);
 }
 
+function assertPreviousStageConfirmed(project, definition) {
+  const previous = project.stages.find(
+    (item) => item.order === definition.order - 1,
+  );
+  if (!previous || previous.status !== 'confirmed') {
+    throw workflowError(
+      'stage_order_violation',
+      `Сначала подтвердите этап ${previous?.id || 'предыдущий этап'}`,
+    );
+  }
+}
+
+function assertHttpUrl(value) {
+  assertNonEmptyString(value, 'url');
+  let parsed;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw workflowError('invalid_url', 'Ссылка должна быть абсолютным HTTP(S) URL');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+    throw workflowError('invalid_url', 'Ссылка должна быть абсолютным HTTP(S) URL');
+  }
+}
+
 function assertProject(project) {
   if (!project || typeof project !== 'object' || Array.isArray(project)) {
     throw workflowError('invalid_project', 'Проект должен быть объектом');
@@ -130,6 +155,66 @@ export function createProject(input) {
   };
 }
 
+/** Команда сдаёт ссылку и описание результата для текущего этапа. */
+export function submitStage(project, stageId, submission, submittedBy) {
+  assertProject(project);
+  assertNonEmptyString(stageId, 'stageId');
+  assertNonEmptyString(submittedBy, 'submittedBy');
+
+  const definition = findStageDefinition(stageId);
+  if (!definition) {
+    throw workflowError('unknown_stage', `Неизвестный этап: ${stageId}`);
+  }
+  if (stageId === 'selected') {
+    throw workflowError('stage_not_submittable', 'Выбор команды не требует сдачи результата');
+  }
+  if (submittedBy.trim() !== project.teamId) {
+    throw workflowError('unauthorized_actor', 'Результат может сдать только выбранная команда');
+  }
+  if (!submission || typeof submission !== 'object' || Array.isArray(submission)) {
+    throw workflowError('invalid_input', 'Результат этапа должен быть объектом');
+  }
+  assertNonEmptyString(submission.description, 'description');
+  assertHttpUrl(submission.url);
+
+  const next = clone(project);
+  const stage = next.stages.find((item) => item.id === stageId);
+  if (stage.status === 'confirmed') {
+    throw workflowError('confirmed_stage_locked', 'Подтверждённый этап нельзя сдать повторно');
+  }
+  assertPreviousStageConfirmed(next, definition);
+  if (stage.status === 'pending' && stage.submission) {
+    throw workflowError('submission_awaiting_review', 'Результат уже ожидает решения бизнеса');
+  }
+
+  const previousRevisions = next.history
+    .filter((event) => event.action === 'stage_submitted' && event.stageId === stageId)
+    .map((event) => event.submission?.revision || 0);
+  const revision = Math.max(stage.submission?.revision || 0, ...previousRevisions) + 1;
+  const occurredAt = nowIso();
+  stage.status = 'pending';
+  stage.submission = {
+    description: submission.description.trim(),
+    url: submission.url.trim(),
+    submittedAt: occurredAt,
+    submittedBy: submittedBy.trim(),
+    revision,
+  };
+  delete stage.rejectedAt;
+  delete stage.rejectedBy;
+  delete stage.rejectionReason;
+
+  next.history.push({
+    action: 'stage_submitted',
+    stageId,
+    actorId: submittedBy.trim(),
+    occurredAt,
+    submission: { ...stage.submission },
+  });
+
+  return updateDerivedFields(next);
+}
+
 /** Подтверждает этап без повторного начисления баллов. */
 export function confirmStage(project, stageId, confirmedBy) {
   assertProject(project);
@@ -149,14 +234,12 @@ export function confirmStage(project, stageId, confirmedBy) {
   }
 
   if (definition.order > 0) {
-    const previous = next.stages.find(
-      (item) => item.order === definition.order - 1,
-    );
-    if (!previous || previous.status !== 'confirmed') {
-      throw workflowError(
-        'stage_order_violation',
-        `Сначала подтвердите этап ${previous?.id || 'предыдущий этап'}`,
-      );
+    assertPreviousStageConfirmed(next, definition);
+    if (!stage.submission) {
+      throw workflowError('stage_not_submitted', 'Команда ещё не сдала результат этапа');
+    }
+    if (stage.status !== 'pending') {
+      throw workflowError('stage_not_awaiting_review', 'Ожидается новая сдача результата');
     }
   }
 
@@ -173,6 +256,7 @@ export function confirmStage(project, stageId, confirmedBy) {
     stageId,
     actorId: confirmedBy.trim(),
     occurredAt,
+    ...(stage.submission ? { submissionRevision: stage.submission.revision } : {}),
   });
 
   return updateDerivedFields(next);
@@ -205,11 +289,18 @@ export function rejectStage(project, stageId, reason) {
     );
   }
 
+  assertPreviousStageConfirmed(next, definition);
+  if (!stage.submission) {
+    throw workflowError('stage_not_submitted', 'Команда ещё не сдала результат этапа');
+  }
   if (
     stage.status === 'rejected'
     && stage.rejectionReason === reason.trim()
   ) {
     return updateDerivedFields(next);
+  }
+  if (stage.status !== 'pending') {
+    throw workflowError('stage_not_awaiting_review', 'Ожидается новая сдача результата');
   }
 
   const actorId = resolveBusinessActor(next);
@@ -225,6 +316,7 @@ export function rejectStage(project, stageId, reason) {
     actorId,
     reason: reason.trim(),
     occurredAt,
+    submissionRevision: stage.submission.revision,
   });
 
   return updateDerivedFields(next);
