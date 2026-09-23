@@ -1,2 +1,3 @@
-# hack-95f74784-soile
-Hackathon team repository for soile
+# SOILE
+
+Рабочий MVP находится в папке [`soile-platform`](./soile-platform/README.md).

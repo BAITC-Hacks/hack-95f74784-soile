@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="SOILE — открытая платформа бизнес-задач для студенческих команд." />
+    <title>SOILE — задачи, готовые к работе</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1b2a'/%3E%3Cpath d='M14 21h36v8H22v6h24v8H14z' fill='%23d7ff45'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#" data-view="builder" aria-label="SOILE, на главную"><span class="brand-mark" aria-hidden="true">S</span><span>SOILE</span></a>
+      <nav class="main-nav" id="main-nav" aria-label="Основная навигация"></nav>
+      <div class="header-actions">
+        <div class="role-switch" aria-label="Режим работы"><button class="role-button active" type="button" data-role="business">Бизнес</button><button class="role-button" type="button" data-role="student">Студент</button></div>
+        <button class="icon-button" id="help-button" type="button" aria-label="Как работает платформа">?</button>
+      </div>
+    </header>
+    <main id="app" tabindex="-1"></main>
+
+    <dialog class="dialog" id="ai-dialog" aria-labelledby="ai-title">
+      <form method="dialog" class="dialog-shell" id="ai-form">
+        <header class="dialog-header"><div><p class="eyebrow">AI-помощник / 4 вопроса</p><h2 id="ai-title">Уточним задачу без догадок</h2></div><button class="close-button" value="cancel" aria-label="Закрыть">×</button></header>
+        <p class="dialog-lead">Ответы попадут в карточку только после вашего подтверждения. AI не добавляет факты от себя.</p>
+        <div class="ai-badge"><span></span> Локальная демонстрационная модель</div>
+        <div id="ai-questions" class="question-list"></div>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel">Отмена</button><button class="primary-button compact" type="submit">Обновить карточку <span>↗</span></button></div>
+      </form>
+    </dialog>
+
+    <dialog class="dialog wide-dialog" id="task-dialog" aria-labelledby="task-dialog-title"><div class="dialog-shell" id="task-dialog-content"></div></dialog>
+
+    <dialog class="dialog" id="proposal-dialog" aria-labelledby="proposal-title">
+      <form method="dialog" class="dialog-shell" id="proposal-form">
+        <header class="dialog-header"><div><p class="eyebrow">Отклик команды</p><h2 id="proposal-title">Предложить решение</h2></div><button class="close-button" value="cancel" aria-label="Закрыть">×</button></header>
+        <input type="hidden" name="taskId" />
+        <div class="form-grid">
+          <label class="full"><span>Название команды</span><input name="team" required value="NOVA Lab" /></label>
+          <label class="full"><span>Идея решения</span><textarea name="idea" rows="3" required placeholder="Что именно вы предлагаете"></textarea></label>
+          <label class="full"><span>План работы</span><textarea name="plan" rows="3" required placeholder="Ключевые этапы"></textarea></label>
+          <label><span>Срок</span><input name="timeline" required placeholder="Например, 3 недели" /></label>
+          <label><span>Прототип</span><input name="link" type="url" placeholder="https://…" /></label>
+        </div>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel">Отмена</button><button class="primary-button compact" type="submit">Отправить отклик <span>↗</span></button></div>
+      </form>
+    </dialog>
+
+    <dialog class="dialog" id="help-dialog" aria-labelledby="help-title">
+      <div class="dialog-shell">
+        <header class="dialog-header"><div><p class="eyebrow">Как это работает</p><h2 id="help-title">Открытый выбор, понятные правила</h2></div><button class="close-button" data-close-dialog="help-dialog" aria-label="Закрыть">×</button></header>
+        <ol class="how-list">
+          <li><b>Бизнес описывает задачу.</b><span>AI задаёт вопросы, но ничего не публикует без подтверждения.</span></li>
+          <li><b>Рейтинг показывает готовность.</b><span>Чем полнее карточка, тем выше её позиция в каталоге.</span></li>
+          <li><b>Студенты выбирают сами.</b><span>Каталог открыт всем; рекомендации не скрывают остальные задачи.</span></li>
+          <li><b>Бизнес принимает решение.</b><span>Команды не назначаются автоматически — можно принять одну, несколько или ни одной.</span></li>
+        </ol>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>
