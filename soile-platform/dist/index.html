@@ -24,11 +24,12 @@
 
     <dialog class="dialog" id="ai-dialog" aria-labelledby="ai-title">
       <form method="dialog" class="dialog-shell" id="ai-form">
-        <header class="dialog-header"><div><p class="eyebrow">AI-помощник / 4 вопроса</p><h2 id="ai-title">Уточним задачу без догадок</h2></div><button class="close-button" type="button" data-close-dialog="ai-dialog" aria-label="Закрыть">×</button></header>
-        <p class="dialog-lead">Ответы попадут в карточку только после вашего подтверждения. AI не добавляет факты от себя.</p>
-        <div class="ai-badge"><span></span> Локальная демонстрационная модель</div>
+        <header class="dialog-header"><div><p class="eyebrow" id="ai-eyebrow">AI-помощник</p><h2 id="ai-title">Улучшить задачу с AI</h2></div><button class="close-button" type="button" data-close-dialog="ai-dialog" aria-label="Закрыть">×</button></header>
+        <p class="dialog-lead" id="ai-lead">AI предложит улучшения только для выбранных вами полей. Они попадут в карточку только после вашего подтверждения.</p>
+        <div class="ai-badge"><span></span> OpenAI API · результат остаётся редактируемым</div>
+        <p class="ai-error" id="ai-error" role="alert" hidden></p>
         <div id="ai-questions" class="question-list"></div>
-        <div class="dialog-actions"><button class="secondary-button" type="button" data-close-dialog="ai-dialog">Отмена</button><button class="primary-button compact" type="submit">Обновить карточку <span>↗</span></button></div>
+        <div class="dialog-actions"><button class="secondary-button" id="ai-decline-button" type="button" data-close-dialog="ai-dialog">Отклонить</button><button class="primary-button compact" id="ai-submit-button" type="submit">Применить улучшения <span>↗</span></button></div>
       </form>
     </dialog>
 
@@ -65,7 +66,7 @@
       <div class="dialog-shell">
         <header class="dialog-header"><div><p class="eyebrow">Как это работает</p><h2 id="help-title">Открытый выбор, понятные правила</h2></div><button class="close-button" data-close-dialog="help-dialog" aria-label="Закрыть">×</button></header>
         <ol class="how-list">
-          <li><b>Бизнес описывает задачу.</b><span>AI задаёт вопросы, но ничего не публикует без подтверждения.</span></li>
+          <li><b>Бизнес описывает задачу.</b><span>AI предлагает улучшения, но применяет их только после подтверждения.</span></li>
           <li><b>Рейтинг показывает готовность.</b><span>Чем полнее карточка, тем выше её позиция в каталоге.</span></li>
           <li><b>Студенты выбирают сами.</b><span>Каталог открыт всем; рекомендации не скрывают остальные задачи.</span></li>
           <li><b>Бизнес принимает решение.</b><span>Команды не назначаются автоматически — можно принять одну, несколько или ни одной.</span></li>
