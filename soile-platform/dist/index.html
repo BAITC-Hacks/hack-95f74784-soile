@@ -34,10 +34,22 @@
 
     <dialog class="dialog wide-dialog" id="task-dialog" aria-labelledby="task-dialog-title"><div class="dialog-shell" id="task-dialog-content"></div></dialog>
 
+    <dialog class="dialog compact-dialog" id="archive-dialog" aria-labelledby="archive-title">
+      <div class="dialog-shell archive-confirmation">
+        <div class="archive-symbol" aria-hidden="true"><span></span></div>
+        <p class="eyebrow">Управление задачей</p>
+        <h2 id="archive-title">Переместить в архив?</h2>
+        <p class="dialog-lead">Задача <strong id="archive-task-name"></strong> исчезнет из студенческого каталога. Карточка и все отклики останутся сохранены.</p>
+        <div class="archive-note"><span aria-hidden="true">✓</span><p><b>Можно восстановить в любой момент</b><br />Задача вернётся в раздел активных без потери данных.</p></div>
+        <div class="dialog-actions"><button class="secondary-button" type="button" data-close-dialog="archive-dialog">Оставить активной</button><button class="primary-button compact" id="confirm-archive" type="button">Переместить в архив</button></div>
+      </div>
+    </dialog>
+
     <dialog class="dialog" id="proposal-dialog" aria-labelledby="proposal-title">
       <form method="dialog" class="dialog-shell" id="proposal-form">
         <header class="dialog-header"><div><p class="eyebrow">Отклик команды</p><h2 id="proposal-title">Предложить решение</h2></div><button class="close-button" type="button" data-close-dialog="proposal-dialog" aria-label="Закрыть">×</button></header>
         <input type="hidden" name="taskId" />
+        <input type="hidden" name="proposalId" />
         <div class="form-grid">
           <label class="full"><span>Название команды</span><input name="team" required value="NOVA Lab" /></label>
           <label class="full"><span>Идея решения</span><textarea name="idea" rows="3" required placeholder="Что именно вы предлагаете"></textarea></label>
@@ -45,7 +57,7 @@
           <label><span>Срок</span><input name="timeline" required placeholder="Например, 3 недели" /></label>
           <label><span>Прототип</span><input name="link" type="url" placeholder="https://…" /></label>
         </div>
-        <div class="dialog-actions"><button class="secondary-button" type="button" data-close-dialog="proposal-dialog">Отмена</button><button class="primary-button compact" type="submit">Отправить отклик <span>↗</span></button></div>
+        <div class="dialog-actions"><button class="secondary-button" type="button" data-close-dialog="proposal-dialog">Отмена</button><button class="primary-button compact" id="proposal-submit" type="submit">Отправить отклик <span>↗</span></button></div>
       </form>
     </dialog>
 
