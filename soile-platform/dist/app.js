@@ -1,3 +1,12 @@
+import {
+  STAGES,
+  calculateTeamPoints,
+  confirmStage,
+  createProject,
+  getProjectTimeline,
+  rejectStage,
+} from './modules/project-workflow.mjs';
+
 const STORAGE_KEY = 'soile-mvp-v1';
 
 const seedTasks = [
@@ -20,14 +29,43 @@ const blankDraft = { company:'Моя компания', title:'', theme:'UX / и
 const demoDraft = { company:'Qala Mobility', title:'Сократить время ожидания городского транспорта', theme:'Data / аналитика', context:'Пассажиры не понимают, когда прибудет автобус, и тратят лишнее время на остановках. Нужно проверить причины неточных прогнозов и предложить понятный сценарий информирования.', users:'Ежедневные пассажиры городских маршрутов и диспетчеры транспортного оператора', data:'Обезличенная история GPS-позиций за шесть месяцев, расписания маршрутов и 40 обращений пассажиров', outcome:'Интерактивный прототип экрана прибытия и рекомендации по улучшению алгоритма прогноза', criteria:'Средняя ошибка прогноза не превышает трёх минут, а 8 из 10 участников теста понимают время прибытия', constraints:'Четыре недели; только обезличенные данные; решение должно работать в мобильном браузере', contact:'Еженедельный созвон по вторникам, контактное лицо — продуктовый менеджер транспортного оператора', deadline:'2026-12-18', aiUsed:false };
 const scoreFields = [ ['context','Контекст и потребность',20,36], ['data','Данные и материалы',20,22], ['outcome','Ожидаемый результат',15,16], ['criteria','Критерии успеха',15,16], ['constraints','Ограничения',10,12], ['users','Пользователи',10,12], ['contact','Связь с бизнесом',10,10] ];
 
-function initialState(){ return { tasks:seedTasks, proposals:seedProposals, draft:{...blankDraft}, editingTaskId:null, teamPoints:{'NOVA Lab':780,'Data Nomads':640,'Kórme':520,'Pixel Crew':410} }; }
+function initialState(){ return { tasks:seedTasks, proposals:seedProposals, projects:[], draft:{...blankDraft}, editingTaskId:null, teamPoints:{'NOVA Lab':780,'Data Nomads':640,'Kórme':520,'Pixel Crew':410} }; }
 function loadState(){
   try {
     const parsed=JSON.parse(localStorage.getItem(STORAGE_KEY));
     if(parsed?.tasks&&parsed?.proposals&&parsed?.draft){
       const tasks=parsed.tasks.map(task=>({...task,status:task.status||'published'}));
+      const proposals=parsed.proposals.map(proposal=>({...proposal}));
+      const projects=Array.isArray(parsed.projects)?parsed.projects.map(project=>({...project})):[];
+      const teamPoints={...(parsed.teamPoints||initialState().teamPoints)};
       const editingTaskId=tasks.some(task=>task.id===parsed.editingTaskId)?parsed.editingTaskId:null;
-      return {...parsed,tasks,draft:{...blankDraft,...parsed.draft},editingTaskId,teamPoints:parsed.teamPoints||initialState().teamPoints};
+      let migrated=false;
+
+      for(const proposal of proposals){
+        if(proposal.status!=='accepted')continue;
+        if(proposal.rewarded&&!proposal.legacyRewardMigrated){
+          teamPoints[proposal.team]=Math.max(0,(teamPoints[proposal.team]||proposal.points||0)-250);
+          proposal.rewarded=false;
+          proposal.legacyRewardMigrated=true;
+          migrated=true;
+        }
+        if(!projects.some(project=>project.proposalId===proposal.id)){
+          const project=createProject({
+            id:`project-${proposal.id}`,
+            taskId:proposal.taskId,
+            teamId:proposal.team,
+            businessId:'business-demo',
+            selectedBy:'business-demo',
+            occurredAt:proposal.acceptedAt||new Date().toISOString(),
+          });
+          projects.push({...project,proposalId:proposal.id,teamName:proposal.team});
+          migrated=true;
+        }
+      }
+
+      const restored={...parsed,tasks,proposals,projects,draft:{...blankDraft,...parsed.draft},editingTaskId,teamPoints};
+      if(migrated)localStorage.setItem(STORAGE_KEY,JSON.stringify(restored));
+      return restored;
     }
   } catch(error){ console.warn('Не удалось загрузить данные',error); }
   return initialState();
@@ -38,6 +76,7 @@ let role='business';
 let currentView='builder';
 let catalogFilter='all';
 let searchQuery='';
+let activeProjectId=null;
 const app=document.querySelector('#app');
 const nav=document.querySelector('#main-nav');
 const toast=document.querySelector('#toast');
@@ -55,15 +94,21 @@ const actionIcons = {
 };
 function isPublished(task){ return (task.status||'published')==='published'; }
 function taskToDraft(task){ return Object.fromEntries(Object.keys(blankDraft).map(key=>[key,task[key]??blankDraft[key]])); }
+function projectForProposal(proposalId){ return state.projects.find(project=>project.proposalId===proposalId); }
+function projectForId(projectId){ return state.projects.find(project=>project.id===projectId); }
+function teamProjectPoints(team){ return state.projects.filter(project=>project.teamName===team||project.teamId===team).reduce((total,project)=>total+calculateTeamPoints(project),0); }
+function teamScore(team){ return (state.teamPoints[team]||0)+teamProjectPoints(team); }
+function nextProjectStage(project){ return project.stages.find(stage=>stage.id!=='selected'&&stage.status!=='confirmed')||null; }
+function stageStatusLabel(status){ return {confirmed:'Подтверждён',rejected:'Отклонён',pending:'Ожидает'}[status]||status; }
 function scoreTask(task){ const items=scoreFields.map(([key,label,weight,min])=>{ const text=(task[key]||'').trim(); const earned=text.length>=min?weight:0; return {key,label,weight,earned}; }); return {total:items.reduce((sum,item)=>sum+item.earned,0),items}; }
 function readiness(score){ if(score>=90)return{label:'Приоритетная',className:'priority',copy:'Полностью готова к работе и выделяется в каталоге.'}; if(score>=70)return{label:'Готовая',className:'ready',copy:'Хорошо описана и получает повышенную позицию.'}; if(score>=40)return{label:'Рабочая',className:'working',copy:'Студенты могут откликаться; детали ещё можно усилить.'}; return{label:'Черновик',className:'draft',copy:'Видна в каталоге, но требует дополнительных уточнений.'}; }
 function showToast(message){ toast.textContent=message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer=setTimeout(()=>toast.classList.remove('show'),2600); }
 function formatDate(value){ if(!value)return'Срок не указан'; return new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',year:'numeric'}).format(new Date(`${value}T12:00:00`)); }
 function emptyState(title,text){ return `<div class="empty-state"><h3>${title}</h3><p>${text}</p></div>`; }
 
-function renderNav(){ const business=[['builder','Конструктор'],['tasks','Мои задачи'],['responses',`Отклики · ${state.proposals.filter(p=>p.status==='pending').length}`]]; const student=[['catalog','Каталог'],['my-responses','Мои отклики']]; nav.innerHTML=(role==='business'?business:student).map(([id,label])=>`<button class="nav-button ${currentView===id?'active':''}" data-view="${id}">${label}</button>`).join(''); document.querySelectorAll('.role-button').forEach(button=>button.classList.toggle('active',button.dataset.role===role)); }
+function renderNav(){ const business=[['builder','Конструктор'],['tasks','Мои задачи'],['responses',`Отклики · ${state.proposals.filter(p=>p.status==='pending').length}`],['projects',`Проекты · ${state.projects.length}`]]; const student=[['catalog','Каталог'],['my-responses','Мои отклики'],['my-projects','Мои проекты']]; const activeView=currentView==='project-detail'?(role==='business'?'projects':'my-projects'):currentView; nav.innerHTML=(role==='business'?business:student).map(([id,label])=>`<button class="nav-button ${activeView===id?'active':''}" data-view="${id}">${label}</button>`).join(''); document.querySelectorAll('.role-button').forEach(button=>button.classList.toggle('active',button.dataset.role===role)); }
 function setView(view){ currentView=view; render(); window.scrollTo({top:0,behavior:'smooth'}); }
-function render(){ renderNav(); if(currentView==='builder')renderBuilder(); if(currentView==='tasks')renderBusinessTasks(); if(currentView==='responses')renderResponses(); if(currentView==='catalog')renderCatalog(); if(currentView==='my-responses')renderMyResponses(); }
+function render(){ renderNav(); if(currentView==='builder')renderBuilder(); if(currentView==='tasks')renderBusinessTasks(); if(currentView==='responses')renderResponses(); if(currentView==='projects')renderProjects(); if(currentView==='project-detail')renderProjectDetail(activeProjectId); if(currentView==='catalog')renderCatalog(); if(currentView==='my-responses')renderMyResponses(); if(currentView==='my-projects')renderProjects('NOVA Lab'); }
 
 function renderBuilder(){
   const editingTask=state.tasks.find(task=>task.id===state.editingTaskId); const isEditing=Boolean(editingTask);
@@ -140,8 +185,117 @@ function renderBusinessTasks(){
 }
 
 function renderResponses(taskId=null){ const proposals=state.proposals.filter(p=>!taskId||p.taskId===taskId); app.innerHTML=`<section class="page narrow"><header class="page-head"><div><p class="eyebrow">Решение принимает бизнес</p><h1 class="page-title medium">Отклики команд</h1><p class="page-subtitle">Сравните идеи и планы. Можно принять одну, несколько или ни одной команды.</p></div></header><div class="list-stack">${proposals.length?proposals.map(renderProposalCard).join(''):emptyState('Откликов пока нет','После публикации задачи здесь появятся предложения студенческих команд.')}</div></section>`; }
-function renderProposalCard(proposal){ const task=state.tasks.find(t=>t.id===proposal.taskId); const statusLabel={pending:'На рассмотрении',accepted:'Принята',declined:'Отклонена'}[proposal.status]; return `<article class="proposal-card"><div class="proposal-card-head"><div><p class="eyebrow muted">${escapeHtml(task?.title||'Задача')}</p><h3>${escapeHtml(proposal.team)}</h3><p class="decision-note">${escapeHtml(proposal.timeline)} ${proposal.link?`· <a href="${escapeHtml(proposal.link)}" target="_blank" rel="noreferrer">прототип</a>`:''}</p></div><div class="team-score"><span>${state.teamPoints[proposal.team]||proposal.points||0}</span> баллов</div></div><div class="proposal-grid"><div><h4>Идея</h4><p>${escapeHtml(proposal.idea)}</p></div><div><h4>План</h4><p>${escapeHtml(proposal.plan)}</p></div></div>${proposal.status==='pending'?`<div class="proposal-actions"><button class="primary-button" data-decision="accepted" data-proposal="${proposal.id}">Выбрать команду</button><button class="danger-button" data-decision="declined" data-proposal="${proposal.id}">Отклонить</button></div>`:`<div class="proposal-actions"><span class="status-pill ${proposal.status==='accepted'?'ready':'draft'}">${statusLabel}</span></div>`}</article>`; }
-function updateDecision(id,decision){ const proposal=state.proposals.find(p=>p.id===id); if(!proposal)return; proposal.status=decision; if(decision==='accepted'&&!proposal.rewarded){ state.teamPoints[proposal.team]=(state.teamPoints[proposal.team]||proposal.points||0)+250; proposal.rewarded=true; } saveState(); renderResponses(); renderNav(); showToast(decision==='accepted'?'Команда выбрана. Ей начислено 250 баллов прогресса':'Отклик отклонён'); }
+function renderProposalCard(proposal){
+  const task=state.tasks.find(t=>t.id===proposal.taskId);
+  const project=projectForProposal(proposal.id);
+  const statusLabel={pending:'На рассмотрении',accepted:'Принята',declined:'Отклонена'}[proposal.status];
+  const decisionActions=proposal.status==='pending'
+    ? `<div class="proposal-actions"><button class="primary-button" data-decision="accepted" data-proposal="${proposal.id}">Выбрать команду</button><button class="danger-button" data-decision="declined" data-proposal="${proposal.id}">Отклонить</button></div>`
+    : `<div class="proposal-actions"><span class="status-pill ${proposal.status==='accepted'?'ready':'draft'}">${statusLabel}</span>${project?`<button class="secondary-button" data-open-project="${project.id}">Открыть проект</button>`:''}</div>`;
+  return `<article class="proposal-card"><div class="proposal-card-head"><div><p class="eyebrow muted">${escapeHtml(task?.title||'Задача')}</p><h3>${escapeHtml(proposal.team)}</h3><p class="decision-note">${escapeHtml(proposal.timeline)} ${proposal.link?`· <a href="${escapeHtml(proposal.link)}" target="_blank" rel="noreferrer">прототип</a>`:''}</p></div><div class="team-score"><span>${teamScore(proposal.team)}</span> баллов</div></div><div class="proposal-grid"><div><h4>Идея</h4><p>${escapeHtml(proposal.idea)}</p></div><div><h4>План</h4><p>${escapeHtml(proposal.plan)}</p></div></div>${decisionActions}</article>`;
+}
+function updateDecision(id,decision){
+  const proposal=state.proposals.find(item=>item.id===id);
+  if(!proposal||!['accepted','declined'].includes(decision))return;
+
+  if(decision==='accepted'){
+    proposal.status='accepted';
+    proposal.acceptedAt=proposal.acceptedAt||new Date().toISOString();
+    proposal.rewarded=false;
+    if(!projectForProposal(proposal.id)){
+      const project=createProject({
+        id:`project-${proposal.id}`,
+        taskId:proposal.taskId,
+        teamId:proposal.team,
+        businessId:'business-demo',
+        selectedBy:'business-demo',
+        occurredAt:proposal.acceptedAt,
+      });
+      state.projects.push({...project,proposalId:proposal.id,teamName:proposal.team});
+    }
+    saveState();
+    renderResponses();
+    renderNav();
+    showToast('Команда выбрана. Баллы будут начислены после подтверждения этапов');
+    return;
+  }
+
+  proposal.status='declined';
+  saveState();
+  renderResponses();
+  renderNav();
+  showToast('Отклик отклонён');
+}
+
+function renderProjects(team=null){
+  const projects=state.projects.filter(project=>!team||project.teamName===team||project.teamId===team);
+  const title=team?'Проекты команды':'Активные проекты';
+  const subtitle=team?'Следите за этапами, решениями бизнеса и подтверждёнными баллами.':'Подтверждайте фактический прогресс. Выбор команды сам по себе не приносит баллы.';
+  app.innerHTML=`<section class="page narrow"><header class="page-head"><div><p class="eyebrow">Проектный прогресс</p><h1 class="page-title medium">${title}</h1><p class="page-subtitle">${subtitle}</p></div>${team?`<div class="team-score"><span>${teamScore(team)}</span> баллов ${escapeHtml(team)}</div>`:''}</header><div class="project-grid">${projects.length?projects.map(renderProjectCard).join(''):emptyState('Проектов пока нет',team?'После выбора вашей команды бизнесом здесь появится проект.':'Примите подходящий отклик, чтобы начать проект с нулевым балансом.')}</div></section>`;
+}
+
+function renderProjectCard(project){
+  const task=state.tasks.find(item=>item.id===project.taskId);
+  const nextStage=nextProjectStage(project);
+  const completed=project.stages.filter(stage=>stage.id!=='selected'&&stage.status==='confirmed').length;
+  const percent=Math.round(completed/(STAGES.length-1)*100);
+  return `<article class="project-card"><div class="project-card-top"><div><p class="eyebrow muted">${escapeHtml(project.teamName||project.teamId)}</p><h3>${escapeHtml(task?.title||'Задача')}</h3></div><div class="project-points"><strong>${calculateTeamPoints(project)}</strong><span>баллов</span></div></div><p class="project-next">${nextStage?`Текущий этап: <b>${escapeHtml(nextStage.label)}</b>`:'Все этапы подтверждены'}</p><div class="project-progress"><span style="width:${percent}%"></span></div><div class="project-card-footer"><span>${completed} из ${STAGES.length-1} рабочих этапов</span><button class="primary-button" data-open-project="${project.id}">Открыть проект</button></div></article>`;
+}
+
+function renderProjectDetail(projectId){
+  const project=projectForId(projectId);
+  if(!project){ renderProjects(role==='student'?'NOVA Lab':null); return; }
+  if(role==='student'&&project.teamName!=='NOVA Lab'&&project.teamId!=='NOVA Lab'){ renderProjects('NOVA Lab'); return; }
+  const task=state.tasks.find(item=>item.id===project.taskId);
+  const proposal=state.proposals.find(item=>item.id===project.proposalId);
+  const timeline=getProjectTimeline(project);
+  const nextStage=nextProjectStage(project);
+  const points=calculateTeamPoints(project);
+  const completed=project.stages.filter(stage=>stage.id!=='selected'&&stage.status==='confirmed').length;
+  const percent=Math.round(completed/(STAGES.length-1)*100);
+  const actionPanel=role==='business'&&nextStage
+    ? `<section class="project-action-panel"><p class="eyebrow light">Решение бизнеса</p><h2>${escapeHtml(nextStage.label)}</h2><p>Подтвердите только фактически выполненный этап. Повторное подтверждение не начислит баллы ещё раз.</p><label for="stage-reason">Причина отклонения</label><textarea id="stage-reason" rows="3" placeholder="Обязательно при отклонении"></textarea><div class="project-action-buttons"><button class="primary-button acid-button" data-confirm-stage="${nextStage.id}" data-project-id="${project.id}">Подтвердить этап · +${nextStage.points}</button><button class="danger-button" data-reject-stage="${nextStage.id}" data-project-id="${project.id}">Отклонить</button></div></section>`
+    : `<section class="project-action-panel"><p class="eyebrow light">${project.status==='completed'?'Проект завершён':'Решение бизнеса'}</p><h2>${project.status==='completed'?'Все этапы подтверждены':'Ожидается подтверждение'}</h2><p>${role==='student'?'Команда видит прогресс, но не может подтверждать этапы самостоятельно.':'Дополнительных действий сейчас не требуется.'}</p></section>`;
+
+  app.innerHTML=`<section class="page narrow"><button class="text-button project-back" data-back-projects>← Все проекты</button><header class="project-hero"><div><p class="eyebrow">${escapeHtml(project.teamName||project.teamId)} / ${escapeHtml(task?.company||'Бизнес')}</p><h1 class="page-title medium">${escapeHtml(task?.title||'Проект')}</h1><p class="page-subtitle">${escapeHtml(proposal?.idea||'Команда выбрана для выполнения задачи.')}</p></div><div class="project-total"><strong>${points}</strong><span>подтверждённых баллов</span></div></header><div class="project-detail-grid"><section><div class="project-summary"><div><span>Текущий этап</span><strong>${escapeHtml(nextStage?.label||'Проект завершён')}</strong></div><div><span>Прогресс</span><strong>${completed}/${STAGES.length-1}</strong></div></div><div class="project-progress large"><span style="width:${percent}%"></span></div><div class="timeline">${timeline.map(renderTimelineStage).join('')}</div></section>${actionPanel}</div></section>`;
+}
+
+function renderTimelineStage(stage){
+  const event=stage.events.at(-1);
+  const statusClass=stage.status==='confirmed'?'confirmed':stage.status==='rejected'?'rejected':'pending';
+  const meta=event?`${formatEventDate(event.occurredAt)} · ${escapeHtml(event.actorId)}`:'Действий пока нет';
+  return `<article class="timeline-stage ${statusClass}"><div class="timeline-marker">${stage.order+1}</div><div><div class="timeline-title"><h3>${escapeHtml(stage.label)}</h3><span class="status-pill ${statusClass}">${stageStatusLabel(stage.status)}</span></div><p>${meta}</p>${stage.rejectionReason?`<div class="rejection-note"><b>Причина:</b> ${escapeHtml(stage.rejectionReason)}</div>`:''}</div><strong class="timeline-points">${stage.points?`+${stage.points}`:'0'}</strong></article>`;
+}
+
+function formatEventDate(value){
+  if(!value)return'Дата не указана';
+  return new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(value));
+}
+
+function confirmProjectStage(projectId,stageId){
+  const index=state.projects.findIndex(project=>project.id===projectId);
+  if(index<0)return;
+  try{
+    state.projects[index]=confirmStage(state.projects[index],stageId,'business-demo');
+    saveState();
+    renderProjectDetail(projectId);
+    renderNav();
+    showToast('Этап подтверждён. Баллы начислены один раз');
+  }catch(error){ showToast(error.message||'Не удалось подтвердить этап'); }
+}
+
+function rejectProjectStage(projectId,stageId){
+  const index=state.projects.findIndex(project=>project.id===projectId);
+  if(index<0)return;
+  const reason=document.querySelector('#stage-reason')?.value.trim()||'';
+  if(!reason){ showToast('Укажите причину отклонения этапа'); document.querySelector('#stage-reason')?.focus(); return; }
+  try{
+    state.projects[index]=rejectStage(state.projects[index],stageId,reason);
+    saveState();
+    renderProjectDetail(projectId);
+    showToast('Этап отклонён без начисления баллов');
+  }catch(error){ showToast(error.message||'Не удалось отклонить этап'); }
+}
 
 function renderCatalog(){
   const ranked=state.tasks.filter(isPublished).map(task=>({...task,score:scoreTask(task).total})).sort((a,b)=>b.score-a.score||b.createdAt-a.createdAt);
@@ -149,14 +303,14 @@ function renderCatalog(){
   if(catalogFilter.startsWith('theme:')&&!themes.includes(catalogFilter.slice(6)))catalogFilter='all';
   const filters=[['all','Все темы'],['ready','70+ готовые'],...themes.map(theme=>[`theme:${theme}`,theme])];
   const filtered=ranked.filter(task=>(catalogFilter==='all'||(catalogFilter==='ready'?task.score>=70:catalogFilter.startsWith('theme:')&&task.theme===catalogFilter.slice(6)))&&(`${task.title} ${task.company} ${task.theme}`.toLowerCase().includes(searchQuery.toLowerCase())));
-  app.innerHTML=`<section class="page"><header class="page-head"><div><p class="eyebrow">Открытый каталог</p><h1 class="page-title">Выберите задачу, в которой хотите разобраться</h1><p class="page-subtitle">Фильтры формируются по темам опубликованных бизнес-задач, поэтому каталог всегда соответствует реальным направлениям.</p></div><div class="team-score"><span>${state.teamPoints['NOVA Lab']||0}</span> баллов NOVA Lab</div></header><div class="catalog-toolbar"><input class="search-input" id="catalog-search" type="search" placeholder="Поиск по задаче, компании или теме" value="${escapeHtml(searchQuery)}"/><div class="filter-group">${filters.map(([id,label])=>`<button class="filter-button ${catalogFilter===id?'active':''}" data-filter="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join('')}</div></div><div class="task-grid">${filtered.length?filtered.map(renderTaskCard).join(''):emptyState('Ничего не найдено','Попробуйте изменить запрос или открыть все темы.')}</div></section>`;
+  app.innerHTML=`<section class="page"><header class="page-head"><div><p class="eyebrow">Открытый каталог</p><h1 class="page-title">Выберите задачу, в которой хотите разобраться</h1><p class="page-subtitle">Фильтры формируются по темам опубликованных бизнес-задач, поэтому каталог всегда соответствует реальным направлениям.</p></div><div class="team-score"><span>${teamScore('NOVA Lab')}</span> баллов NOVA Lab</div></header><div class="catalog-toolbar"><input class="search-input" id="catalog-search" type="search" placeholder="Поиск по задаче, компании или теме" value="${escapeHtml(searchQuery)}"/><div class="filter-group">${filters.map(([id,label])=>`<button class="filter-button ${catalogFilter===id?'active':''}" data-filter="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join('')}</div></div><div class="task-grid">${filtered.length?filtered.map(renderTaskCard).join(''):emptyState('Ничего не найдено','Попробуйте изменить запрос или открыть все темы.')}</div></section>`;
   document.querySelector('#catalog-search').addEventListener('input',event=>{ searchQuery=event.target.value; renderCatalog(); const input=document.querySelector('#catalog-search'); input.focus(); input.setSelectionRange(input.value.length,input.value.length); });
 }
 function renderTaskCard(task){ const level=readiness(task.score); const recommended=/ux|data/i.test(task.theme); const count=state.proposals.filter(p=>p.taskId===task.id).length; return `<article class="task-card"><div class="task-card-head"><div>${recommended?'<span class="badge recommended">Подходит вам</span>':`<span class="status-pill ${level.className}">${level.label}</span>`}</div><div class="score-chip">${task.score}</div></div><p class="task-company">${escapeHtml(task.company)}</p><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.context)}</p><div class="task-meta"><span class="meta-chip">${escapeHtml(task.theme)}</span><span class="meta-chip">до ${formatDate(task.deadline)}</span></div><div class="card-footer"><span>${count} откликов</span><button class="text-button task-action icon-action-button" data-open-task="${task.id}" aria-label="Открыть" title="Открыть">${actionIcons.open}</button></div></article>`; }
 function openTask(id){ const task=state.tasks.find(item=>item.id===id); if(!task)return; if(role==='student'&&!isPublished(task)){ showToast('Задача находится в архиве и недоступна студентам'); return; } const scored=scoreTask(task); const level=readiness(scored.total); document.querySelector('#task-dialog-content').innerHTML=`<header class="dialog-header"><div><p class="eyebrow">${escapeHtml(task.company)} / ${escapeHtml(task.theme)}</p><h2 id="task-dialog-title">${escapeHtml(task.title)}</h2></div><button class="close-button" type="button" data-close-dialog="task-dialog" aria-label="Закрыть">×</button></header><div class="task-detail-grid"><div class="task-detail-copy"><h3>Контекст</h3><p>${escapeHtml(task.context)}</p><h3>Для кого</h3><p>${escapeHtml(task.users)||'Нужно уточнить'}</p><h3>Данные и материалы</h3><p>${escapeHtml(task.data)||'Нужно уточнить'}</p><h3>Ожидаемый результат</h3><p>${escapeHtml(task.outcome)||'Нужно уточнить'}</p><h3>Критерии успеха</h3><p>${escapeHtml(task.criteria)||'Нужно уточнить'}</p><h3>Ограничения</h3><p>${escapeHtml(task.constraints)||'Не указаны'}</p><h3>Связь с бизнесом</h3><p>${escapeHtml(task.contact)||'Нужно уточнить'}</p></div><aside class="detail-aside"><p class="eyebrow light">Рейтинг готовности</p><div class="score-big"><strong>${scored.total}</strong><span>/100</span></div><div class="task-statuses"><span class="status-pill ${level.className}">${level.label}</span>${isPublished(task)?'':'<span class="status-pill archived">В архиве</span>'}</div><p>${level.copy}</p><p><b>Срок:</b><br>${formatDate(task.deadline)}</p>${role==='student'?`<button class="primary-button" data-apply="${task.id}">Предложить решение</button>`:`<div class="detail-actions"><button class="secondary-button task-action icon-action-button" data-edit-task="${task.id}" aria-label="Редактировать" title="Редактировать">${actionIcons.edit}</button>${isPublished(task)?`<button class="danger-button task-action icon-action-button" data-archive-task="${task.id}" aria-label="Архивировать" title="Архивировать">${actionIcons.archive}</button>`:`<button class="secondary-button task-action icon-action-button" data-restore-task="${task.id}" aria-label="Восстановить" title="Восстановить">${actionIcons.restore}</button>`}</div>`}</aside></div>`; taskDialog.showModal(); document.body.classList.add('dialog-open'); }
 function openProposal(id){ const task=state.tasks.find(item=>item.id===id); if(!task||!isPublished(task)){ showToast('На архивную задачу нельзя отправить отклик'); return; } taskDialog.close(); document.querySelector('#proposal-form [name="taskId"]').value=id; proposalDialog.showModal(); document.body.classList.add('dialog-open'); }
-document.querySelector('#proposal-form').addEventListener('submit',event=>{ event.preventDefault(); const fields=Object.fromEntries(new FormData(event.currentTarget).entries()); if(!fields.team.trim()||!fields.idea.trim()||!fields.plan.trim()||!fields.timeline.trim()){ showToast('Заполните команду, идею, план и срок'); return; } state.proposals.push({...fields,id:`p-${Date.now()}`,status:'pending',points:state.teamPoints[fields.team]||300}); if(!state.teamPoints[fields.team])state.teamPoints[fields.team]=300; saveState(); proposalDialog.close(); document.body.classList.remove('dialog-open'); event.currentTarget.reset(); renderNav(); showToast('Отклик отправлен. Решение остаётся за бизнесом'); });
-function renderMyResponses(){ const mine=state.proposals.filter(p=>p.team==='NOVA Lab'); app.innerHTML=`<section class="page narrow"><header class="page-head"><div><p class="eyebrow">NOVA Lab / ${state.teamPoints['NOVA Lab']||0} баллов</p><h1 class="page-title medium">Мои отклики</h1><p class="page-subtitle">Баллы начисляются после подтверждённого этапа работы, а не за количество заявок.</p></div><button class="primary-button" data-view="catalog">Найти задачу</button></header><div class="list-stack">${mine.length?mine.map(p=>{ const task=state.tasks.find(t=>t.id===p.taskId); return `<article class="list-card"><div class="mini-score">${scoreTask(task||{}).total}</div><div><span class="status-pill ${p.status==='accepted'?'ready':p.status==='declined'?'draft':'working'}">${{pending:'На рассмотрении',accepted:'Команда выбрана',declined:'Отклонён'}[p.status]}</span><h3>${escapeHtml(task?.title||'Задача')}</h3><p>${escapeHtml(p.idea)}</p></div><div class="list-actions"><button class="secondary-button" data-open-task="${p.taskId}">Карточка задачи</button></div></article>`; }).join(''):emptyState('У команды ещё нет откликов','Откройте каталог, выберите интересную задачу и предложите решение.')}</div></section>`; }
+document.querySelector('#proposal-form').addEventListener('submit',event=>{ event.preventDefault(); const fields=Object.fromEntries(new FormData(event.currentTarget).entries()); if(!fields.team.trim()||!fields.idea.trim()||!fields.plan.trim()||!fields.timeline.trim()){ showToast('Заполните команду, идею, план и срок'); return; } if(!(fields.team in state.teamPoints))state.teamPoints[fields.team]=0; state.proposals.push({...fields,id:`p-${Date.now()}`,status:'pending',points:teamScore(fields.team)}); saveState(); proposalDialog.close(); document.body.classList.remove('dialog-open'); event.currentTarget.reset(); renderNav(); showToast('Отклик отправлен. Решение остаётся за бизнесом'); });
+function renderMyResponses(){ const mine=state.proposals.filter(p=>p.team==='NOVA Lab'); app.innerHTML=`<section class="page narrow"><header class="page-head"><div><p class="eyebrow">NOVA Lab / ${teamScore('NOVA Lab')} баллов</p><h1 class="page-title medium">Мои отклики</h1><p class="page-subtitle">Баллы начисляются после подтверждённого этапа работы, а не за количество заявок.</p></div><button class="primary-button" data-view="catalog">Найти задачу</button></header><div class="list-stack">${mine.length?mine.map(p=>{ const task=state.tasks.find(t=>t.id===p.taskId); const project=projectForProposal(p.id); return `<article class="list-card"><div class="mini-score">${scoreTask(task||{}).total}</div><div><span class="status-pill ${p.status==='accepted'?'ready':p.status==='declined'?'draft':'working'}">${{pending:'На рассмотрении',accepted:'Команда выбрана',declined:'Отклонён'}[p.status]}</span><h3>${escapeHtml(task?.title||'Задача')}</h3><p>${escapeHtml(p.idea)}</p></div><div class="list-actions"><button class="secondary-button" data-open-task="${p.taskId}">Карточка задачи</button>${project?`<button class="primary-button" data-open-project="${project.id}">Открыть проект</button>`:''}</div></article>`; }).join(''):emptyState('У команды ещё нет откликов','Откройте каталог, выберите интересную задачу и предложите решение.')}</div></section>`; }
 
 document.addEventListener('click',event=>{
   const viewButton=event.target.closest('[data-view]'); if(viewButton){ event.preventDefault(); setView(viewButton.dataset.view); return; }
@@ -168,6 +322,10 @@ document.addEventListener('click',event=>{
   const taskButton=event.target.closest('[data-open-task]'); if(taskButton){ openTask(taskButton.dataset.openTask); return; }
   const responseButton=event.target.closest('[data-task-responses]'); if(responseButton){ currentView='responses'; renderNav(); renderResponses(responseButton.dataset.taskResponses); return; }
   const decisionButton=event.target.closest('[data-decision]'); if(decisionButton){ updateDecision(decisionButton.dataset.proposal,decisionButton.dataset.decision); return; }
+  const projectButton=event.target.closest('[data-open-project]'); if(projectButton){ activeProjectId=projectButton.dataset.openProject; currentView='project-detail'; render(); window.scrollTo({top:0,behavior:'smooth'}); return; }
+  const backProjectsButton=event.target.closest('[data-back-projects]'); if(backProjectsButton){ currentView=role==='business'?'projects':'my-projects'; render(); return; }
+  const confirmStageButton=event.target.closest('[data-confirm-stage]'); if(confirmStageButton){ confirmProjectStage(confirmStageButton.dataset.projectId,confirmStageButton.dataset.confirmStage); return; }
+  const rejectStageButton=event.target.closest('[data-reject-stage]'); if(rejectStageButton){ rejectProjectStage(rejectStageButton.dataset.projectId,rejectStageButton.dataset.rejectStage); return; }
   const filterButton=event.target.closest('[data-filter]'); if(filterButton){ catalogFilter=filterButton.dataset.filter; renderCatalog(); return; }
   const applyButton=event.target.closest('[data-apply]'); if(applyButton){ openProposal(applyButton.dataset.apply); return; }
   const closeButton=event.target.closest('[data-close-dialog]'); if(closeButton){ document.querySelector(`#${closeButton.dataset.closeDialog}`).close(); document.body.classList.remove('dialog-open'); }
@@ -175,7 +333,7 @@ document.addEventListener('click',event=>{
 document.querySelector('#help-button').addEventListener('click',()=>{ document.querySelector('#help-dialog').showModal(); document.body.classList.add('dialog-open'); });
 document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('close',()=>document.body.classList.remove('dialog-open')));
 
-function registerWebMcpTools(){ const context=document.modelContext; if(!context?.registerTool)return; const register=tool=>Promise.resolve(context.registerTool(tool)).catch(error=>console.warn('WebMCP',error)); register({name:'list_published_tasks',title:'Показать задачи',description:'Возвращает опубликованные бизнес-задачи, отсортированные по рейтингу готовности.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:false},execute(){return state.tasks.filter(isPublished).map(t=>({id:t.id,title:t.title,company:t.company,readiness:scoreTask(t).total})).sort((a,b)=>b.readiness-a.readiness);}}); register({name:'create_task_draft',title:'Создать черновик задачи',description:'Создаёт и открывает редактируемый черновик бизнес-задачи. Ничего не публикует.',inputSchema:{type:'object',properties:{title:{type:'string'},context:{type:'string'},company:{type:'string'}},required:['title','context'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute(input){if(!input?.title?.trim()||!input?.context?.trim())throw new Error('Нужны title и context');state.editingTaskId=null;state.draft={...blankDraft,title:input.title.trim(),context:input.context.trim(),company:(input.company||'Моя компания').trim()};saveState();role='business';currentView='builder';render();return{status:'draft_created',readiness:scoreTask(state.draft).total};}}); register({name:'submit_team_proposal',title:'Отправить отклик команды',description:'Отправляет отклик на существующую задачу и обновляет список откликов.',inputSchema:{type:'object',properties:{taskId:{type:'string'},team:{type:'string'},idea:{type:'string'},plan:{type:'string'},timeline:{type:'string'}},required:['taskId','team','idea','plan','timeline'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute(input){if(!state.tasks.some(t=>t.id===input.taskId&&isPublished(t)))throw new Error('Задача не найдена');const proposal={...input,id:`p-${Date.now()}`,status:'pending',points:state.teamPoints[input.team]||300};state.proposals.push(proposal);saveState();renderNav();return{status:'submitted',proposalId:proposal.id};}}); }
+function registerWebMcpTools(){ const context=document.modelContext; if(!context?.registerTool)return; const register=tool=>Promise.resolve(context.registerTool(tool)).catch(error=>console.warn('WebMCP',error)); register({name:'list_published_tasks',title:'Показать задачи',description:'Возвращает опубликованные бизнес-задачи, отсортированные по рейтингу готовности.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:false},execute(){return state.tasks.filter(isPublished).map(t=>({id:t.id,title:t.title,company:t.company,readiness:scoreTask(t).total})).sort((a,b)=>b.readiness-a.readiness);}}); register({name:'create_task_draft',title:'Создать черновик задачи',description:'Создаёт и открывает редактируемый черновик бизнес-задачи. Ничего не публикует.',inputSchema:{type:'object',properties:{title:{type:'string'},context:{type:'string'},company:{type:'string'}},required:['title','context'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute(input){if(!input?.title?.trim()||!input?.context?.trim())throw new Error('Нужны title и context');state.editingTaskId=null;state.draft={...blankDraft,title:input.title.trim(),context:input.context.trim(),company:(input.company||'Моя компания').trim()};saveState();role='business';currentView='builder';render();return{status:'draft_created',readiness:scoreTask(state.draft).total};}}); register({name:'submit_team_proposal',title:'Отправить отклик команды',description:'Отправляет отклик на существующую задачу и обновляет список откликов.',inputSchema:{type:'object',properties:{taskId:{type:'string'},team:{type:'string'},idea:{type:'string'},plan:{type:'string'},timeline:{type:'string'}},required:['taskId','team','idea','plan','timeline'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute(input){if(!state.tasks.some(t=>t.id===input.taskId&&isPublished(t)))throw new Error('Задача не найдена');if(!(input.team in state.teamPoints))state.teamPoints[input.team]=0;const proposal={...input,id:`p-${Date.now()}`,status:'pending',points:teamScore(input.team)};state.proposals.push(proposal);saveState();renderNav();return{status:'submitted',proposalId:proposal.id};}}); }
 
 render();
 registerWebMcpTools();

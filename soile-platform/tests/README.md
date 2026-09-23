@@ -7,21 +7,23 @@
 Из корня репозитория:
 
 ```bash
-node --test soile-platform/tests/*.test.mjs
+node --test .\soile-platform\tests\project-workflow.test.mjs .\soile-platform\tests\project-integration.test.mjs .\soile-platform\tests\ai-review.test.mjs .\soile-platform\tests\rating-rules.test.mjs
 ```
 
 Или из папки `soile-platform`:
 
 ```bash
-node --test tests/*.test.mjs
+node --test .\tests\project-workflow.test.mjs .\tests\project-integration.test.mjs .\tests\ai-review.test.mjs .\tests\rating-rules.test.mjs
 ```
 
 ## Покрытые контракты
 
 - последовательность этапов проекта;
+- создание одного проекта после принятия отклика без стартовой награды;
 - начисление баллов только после подтверждения бизнеса;
 - защита от повторного начисления;
 - отклонение этапов и журнал событий;
+- сохранение проектного состояния после JSON round-trip;
 - отсутствие мутаций входных объектов;
 - AI-вопросы и предложения только из пользовательских данных;
 - сравнение карточки до и после AI;
@@ -29,4 +31,4 @@ node --test tests/*.test.mjs
 - веса и границы рейтинга;
 - доступность опубликованных задач с низким рейтингом.
 
-Модули намеренно не подключены к текущему интерфейсу. Их интеграция выполняется отдельным merge request после объединения параллельных веток.
+Проектный модуль подключён к интерфейсу бизнеса и студента. Тесты проверяют его доменный контракт и интеграцию с сохраняемым состоянием приложения.
